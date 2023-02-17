@@ -9,12 +9,16 @@ import tiktoken
 from tiktoken import Encoding
 
 from common.directory import Directory
+from common.logger_factory import LoggerFactory
 
 
 class BuildEmbeddingUseCase:
     """
     テキストを分散表現に変換するクラス。
     """
+
+    def __init__(self) -> None:
+        self._logger = LoggerFactory.create_logger()
 
     def execute(
         self,
@@ -41,8 +45,9 @@ class BuildEmbeddingUseCase:
             1文あたりの最大トークン数
         """
 
-        print("Text embeddings started.")
+        self._logger.info("Text embeddings started.")
 
+        # トークナイザーを取得する
         tokenizer = tiktoken.get_encoding(encoding)
 
         # テキストファイルを読み込む
@@ -62,7 +67,7 @@ class BuildEmbeddingUseCase:
         for i, text in enumerate(texts):
             embedding = self._text_to_embedding(embedding_model, text)
             embeddings.append(embedding)
-            print(f"now embedding...({i+1}/{len(texts)})")
+            self._logger.info(f"Now embedding...({i+1}/{len(texts)})")
             sleep(3)    # Rate limit対策
 
         # テキストと分散表現をCSVファイルに保存する
@@ -70,7 +75,7 @@ class BuildEmbeddingUseCase:
             texts, embeddings, n_tokens, embeddings_file_path
         )
 
-        print("Text embeddings finished.")
+        self._logger.info("Text embeddings finished.")
 
     def _load_texts(self, text_dir_path: str) -> List[str]:
         """
@@ -170,9 +175,10 @@ class BuildEmbeddingUseCase:
                 # 現在の文のトークン数が最大トークン数よりも大きい場合
                 if n_token > max_tokens_in_sentence:
                     # 処理できないので諦める
-                    raise Exception(
-                        "The number of tokens in one sentence is too large. Please split the text."
+                    self._logger.exception(
+                        f"Embedding skipped due to excessively long sentence. Please divide the sentence into shorter.({sentence})"
                     )
+                    continue
 
                 # それ以外の場合
                 current_chunk.append(sentence)

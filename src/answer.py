@@ -3,11 +3,16 @@ import openai
 import pandas as pd
 from openai.embeddings_utils import distances_from_embeddings
 
+from common.logger_factory import LoggerFactory
+
 
 class AnswerQuestionUseCase:
     """
     テキストに対して質問を投げかけ、回答を得るクラス。
     """
+
+    def __init__(self) -> None:
+        self._logger = LoggerFactory.create_logger()
 
     def execute(
         self,
@@ -45,7 +50,7 @@ class AnswerQuestionUseCase:
             回答
         """
 
-        print("Answering question started.")
+        self._logger.info("Answering question started.")
 
         # テキストと分散表現を読み込む
         df_text = self._load_embeddings_from_csv(embeddings_file_path)
@@ -60,7 +65,7 @@ class AnswerQuestionUseCase:
             context, question, completion_model, max_generate_tokens, stop_sequence
         )
 
-        print("Answering question finished.")
+        self._logger.info("Answering question finished.")
 
         return answer
 
@@ -184,6 +189,10 @@ class AnswerQuestionUseCase:
             stop=stop_sequence,
             model=completion_model,
         )
+
+        self._logger.info(f"Context: {context}")
+        self._logger.info(f"Question: {question}")
+        self._logger.info(f"Answer: {response['choices'][0]['text']}")
 
         # 答えを返す
         return response["choices"][0]["text"]
