@@ -23,10 +23,10 @@ class BuildEmbeddingUseCase:
     def execute(
         self,
         text_dir_path: str,
-        embeddings_file_path: str,
+        text_embeddings_file_path: str,
         embedding_model: str = "text-embedding-ada-002",
         encoding: str = "cl100k_base",
-        max_tokens_in_sentence: int = 500
+        max_sentence_token_count: int = 150
     ) -> None:
         """
         テキストを分散表現に変換する。
@@ -35,13 +35,13 @@ class BuildEmbeddingUseCase:
         ----------
         text_dir_path : str
             テキストファイルのディレクトリパス
-        embeddings_file_path : str
+        text_embeddings_file_path : str
             テキストと分散表現を保存するファイルパス
         embedding_model : str, optional
-            分散表現に変換する際に使用するモデル名
+            使用する分散表現モデル名
         encoding : str, optional
             使用するトークナイザー名
-        max_tokens_in_sentence : int, optional
+        max_sentence_token_count : int, optional
             1文あたりの最大トークン数
         """
 
@@ -53,26 +53,23 @@ class BuildEmbeddingUseCase:
         # テキストファイルを読み込む
         texts = self._load_texts(text_dir_path)
 
-        # テキストの改行を削除する
-        texts = self._remove_newline(texts)
+        # テキストから不要文字を取り除く
+        texts = self._remove_unnecessary_chars(texts)
 
-        # 最大トークン数を下回るように、テキストを分割する。
-        texts = self._split_text_by_max_tokens(tokenizer, texts, max_tokens_in_sentence)
+        # 1文あたりの最大トークン数を超えないように、テキストを文に分割する。
+        sentences = self._split_texts_by_token_count(
+            tokenizer, texts, max_sentence_token_count
+        )
 
         # 分割したテキストのトークン数を取得する
-        n_tokens = list(map(lambda x: len(tokenizer.encode(x)), texts))
+        sentence_token_counts = list(map(lambda x: len(tokenizer.encode(x)), sentences))
 
         # テキストを分散表現に変換する
-        embeddings = []
-        for i, text in enumerate(texts):
-            embedding = self._text_to_embedding(embedding_model, text)
-            embeddings.append(embedding)
-            self._logger.info(f"Now embedding...({i+1}/{len(texts)})")
-            sleep(3)    # Rate limit対策
+        embeddings = self._text_to_embeddings(embedding_model, sentences, sentence_token_counts)
 
         # テキストと分散表現をCSVファイルに保存する
-        self._save_embeddings_to_csv(
-            texts, embeddings, n_tokens, embeddings_file_path
+        self._save_text_embeddings_to_csv(
+            sentences, embeddings, sentence_token_counts, text_embeddings_file_path
         )
 
         self._logger.info("Text embeddings finished.")
@@ -100,9 +97,9 @@ class BuildEmbeddingUseCase:
 
         return texts
 
-    def _remove_newline(self, texts: List[str]) -> List[str]:
+    def _remove_unnecessary_chars(self, texts: List[str]) -> List[str]:
         """
-        テキストの改行を削除する
+        テキストから不要文字を取り除く
 
         Parameters
         ----------
@@ -112,7 +109,7 @@ class BuildEmbeddingUseCase:
         Returns
         -------
         List[str]
-            改行を削除したテキストのリスト
+            不要文字を取り除いたテキストのリスト
         """
 
         # 改行文字をスペースに置換する
@@ -126,14 +123,14 @@ class BuildEmbeddingUseCase:
 
         return texts
 
-    def _split_text_by_max_tokens(
+    def _split_texts_by_token_count(
         self,
         tokenizer: Encoding,
         texts: List[str],
-        max_tokens_in_sentence: int
+        max_sentence_token_count: int
     ) -> List[str]:
         """
-        最大トークン数を下回るように、テキストを分割する。
+        1文あたりの最大トークン数を超えないように、テキストを文に分割する。
 
         Parameters
         ----------
@@ -141,109 +138,154 @@ class BuildEmbeddingUseCase:
             トークナイザー
         texts : List[str]
             テキストのリスト
-        max_tokens_in_sentence : int
+        max_sentence_token_count : int
             1文あたりの最大トークン数
 
         Returns
         -------
         List[str]
-            分割されたテキストのリスト
+            分割された文のリスト
         """
 
-        chunks = []                 # 分割されたテキストを格納するリスト
-        current_chunk = []          # 現在のchunkに追加する文
-        current_chunk_tokens = 0    # 現在のchunkに含まれるトークン数
+        # 分割された文のリスト
+        grouped_sentences = []
 
         for text in texts:
 
             # テキストを文に分割する
-            sentences = re.split(r"[.。]", text)
+            sentences = re.split(
+                r"[.。]",
+                text[:-1] if text[-1] in [".", "。"] else text
+            )
 
             # 各文のトークン数を取得する
-            n_tokens = [len(tokenizer.encode(" " + sentence))
-                        for sentence in sentences]
+            sentence_token_counts = [len(tokenizer.encode(" " + sentence))
+                                     for sentence in sentences]
 
-            # 各文に対してループ処理
-            for sentence, n_token in zip(sentences, n_tokens):
+            # 1文あたりの最大トークン数を超えないように、文をグルーピングする。
+            sentence_groups = self._group_sentences_by_token_count(
+                sentences, sentence_token_counts, max_sentence_token_count
+            )
 
-                # 現在の文を追加すると最大トークン数を超える場合
-                if current_chunk_tokens + n_token > max_tokens_in_sentence:
-                    chunks.append(". ".join(current_chunk) + ".")
-                    current_chunk = []
-                    current_chunk_tokens = 0
+            # 分割された文をリストに追加する
+            for sentence_group in sentence_groups:
+                grouped_sentences.append(". ".join(sentence_group) + ".")
 
-                # 現在の文のトークン数が最大トークン数よりも大きい場合
-                if n_token > max_tokens_in_sentence:
-                    # 処理できないので諦める
-                    self._logger.exception(
-                        f"Embedding skipped due to excessively long sentence. Please divide the sentence into shorter.({sentence})"
-                    )
-                    continue
+        return grouped_sentences
 
-                # それ以外の場合
-                current_chunk.append(sentence)
-                current_chunk_tokens += n_token + 1
-
-        # 残りの文を追加する
-        if current_chunk:
-            chunks.append(". ".join(current_chunk) + ".")
-
-        return chunks
-
-    def _text_to_embedding(self, embedding_model: str, text: str) -> List[float]:
+    def _text_to_embeddings(
+        self,
+        embedding_model: str,
+        sentences: List[str],
+        sentence_token_counts: List[int]
+    ) -> List[float]:
         """
         テキストを分散表現に変換する
 
         Parameters
         ----------
         embedding_model : str
-            使用するモデル名
-        text : str
-            テキスト
+            使用する分散表現モデル名
+        sentences : List[str]
+            文のリスト
+        sentence_token_counts : List[int]
+            各文のトークン数のリスト
 
         Returns
         -------
-        List[float]
-            分散表現
+        List[List[float]]
+            分散表現のリスト
         """
 
-        # テキストを分散表現に変換する
-        oprenai_object = openai.Embedding.create(
-            input=text,
-            engine=embedding_model
-        )
-        t_embeddings = oprenai_object["data"][0]["embedding"]
+        # 1リクエストで照会可能な最大トークン数を超えないように、文をグルーピングする。
+        sentence_groups = self._group_sentences_by_token_count(sentences, sentence_token_counts, 8000)
 
-        return t_embeddings
+        embeddings = []
+        for i, sentence_group in enumerate(sentence_groups):
+            self._logger.info(f"Now embedding...({i+1}/{len(sentence_groups)})")
 
-    def _save_embeddings_to_csv(
+            # テキストを分散表現に変換する
+            embedding_response = openai.Embedding.create(
+                input=sentence_group,
+                engine=embedding_model
+            )
+            embeddings.extend([x["embedding"] for x in embedding_response["data"]])
+
+            sleep(3)    # Rate limit対策
+
+        return embeddings
+
+    def _save_text_embeddings_to_csv(
         self,
-        texts: List[str],
+        sentences: List[str],
         embeddings: List[List[float]],
-        n_tokens: List[int],
-        embeddings_file_path: str
+        sentence_token_count: List[int],
+        text_embeddings_file_path: str
     ) -> None:
         """
         テキストと分散表現をCSVファイルに保存する
 
         Parameters
         ----------
-        texts : List[str]
-            テキストのリスト
+        sentences : List[str]
+            文のリスト
         embeddings : List[List[float]]
             分散表現のリスト
-        n_tokens : List[int]
-            トークン数のリスト
-        embeddings_file_path : str
+        sentence_token_count : List[int]
+            文のトークン数のリスト
+        text_embeddings_file_path : str
             テキストと分散表現を保存するファイル名
         """
 
         # CSVファイルに出力する
         df_text = pd.DataFrame(
-            {"text": texts, "embeddings": embeddings, "n_tokens": n_tokens}
+            {"sentence": sentences, "embeddings": embeddings, "sentence_token_count": sentence_token_count}
         )
-        df_text.index.name = "id"
-        dir_path = os.path.dirname(embeddings_file_path)
+        df_text.index.name = "sentence_id"
+        dir_path = os.path.dirname(text_embeddings_file_path)
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
-        df_text.to_csv(f"{embeddings_file_path}", header=True)
+        df_text.to_csv(f"{text_embeddings_file_path}", header=True)
+
+    def _group_sentences_by_token_count(
+        self,
+        sentences: List[str],
+        sentence_token_counts: List[int],
+        max_token_count_per_group: int
+    ) -> List[List[str]]:
+        """
+        1グループあたりの最大トークン数を超えないように、文をグルーピングする。
+
+        Parameters
+        ----------
+        sentences : List[str]
+            文のリスト
+        sentence_token_counts : List[int]
+            文のトークン数のリスト
+        max_group_token_count : int
+            1グループあたりの最大トークン数
+
+        Returns
+        -------
+        List[List[str]]
+            グルーピングした文のリスト
+        """
+
+        groups = []
+        current_group_token_count = 0
+        current_group = []
+
+        for sentence, token_count in zip(sentences, sentence_token_counts):
+            if current_group_token_count + token_count <= max_token_count_per_group:
+                current_group_token_count += token_count
+                current_group.append(sentence)
+            else:
+                if current_group:
+                    groups.append(current_group)
+                current_group = [sentence]
+                current_group_token_count = token_count
+
+        if current_group:
+            groups.append(current_group)
+
+        return groups
