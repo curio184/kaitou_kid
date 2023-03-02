@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import openai
 import pandas as pd
@@ -252,6 +254,7 @@ class AnswerQuestionUseCase:
         prompt = PromptBuilder.build(context, question)
 
         # コンテキストを与えて質問の回答を得る
+        start_time = time.time()
         completion_response = openai.Completion.create(
             prompt=prompt,
             temperature=0,
@@ -262,11 +265,13 @@ class AnswerQuestionUseCase:
             stop=stop_sequence,
             model=completion_model,
         )
+        finish_time = time.time()
 
         self._logger.info(f"Model: {completion_model}")
         self._logger.info(f"Context: {context}")
         self._logger.info(f"Question: {question}")
         self._logger.info(f"Answer: {completion_response['choices'][0]['text']}")
+        self._logger.info(f"Computation time: {finish_time - start_time} sec")
 
         # 答えを返す
         return completion_response["choices"][0]["text"]
@@ -299,6 +304,7 @@ class AnswerQuestionUseCase:
         prompt = PromptBuilder.build(context, question)
 
         # コンテキストを与えて質問の回答を得る
+        start_time = time.time()
         response = openai.ChatCompletion.create(
             model=completion_model,
             messages=[
@@ -306,11 +312,13 @@ class AnswerQuestionUseCase:
                 {"role": "user", "content": prompt},
             ]
         )
+        finish_time = time.time()
 
         self._logger.info(f"Model: {completion_model}")
         self._logger.info(f"Context: {context}")
         self._logger.info(f"Question: {question}")
         self._logger.info(f"Answer: {response.choices[0].message.content}")
+        self._logger.info(f"Computation time: {finish_time - start_time} sec")
 
         # 答えを返す
         return response.choices[0].message.content
