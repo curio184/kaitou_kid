@@ -134,3 +134,4 @@ dmypy.json
 # Assets
 text/
 embeddings/
+logs/

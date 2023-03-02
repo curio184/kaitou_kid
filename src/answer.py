@@ -4,6 +4,7 @@ import pandas as pd
 from openai.embeddings_utils import distances_from_embeddings
 
 from common.logger_factory import LoggerFactory
+from prompt_builder import PromptBuilder
 
 
 class AnswerQuestionUseCase:
@@ -19,9 +20,9 @@ class AnswerQuestionUseCase:
         text_embeddings_file_path: str,
         question: str,
         embedding_model: str = "text-embedding-ada-002",
-        completion_model: str = "text-davinci-003",
+        completion_model: str = "gpt-3.5-turbo",
         max_context_tokens: int = 1800,
-        max_generate_tokens: int = 150,
+        max_generate_tokens: int = 500,
         stop_sequence=None
     ) -> str:
         """
@@ -131,7 +132,7 @@ class AnswerQuestionUseCase:
         candidate_sentence_ids = []
         for sentence_id in df_text_sorted.index:
             left_boundary = sentence_id - 1 if sentence_id > 0 else sentence_id
-            right_boundary = sentence_id + 1 if sentence_id < df_text_sorted.index.max() else sentence_id
+            right_boundary = sentence_id + 1 if sentence_id + 1 <= df_text_sorted.index.max() else sentence_id
             for neighbor_id in range(left_boundary, right_boundary + 1):
                 if neighbor_id not in candidate_sentence_ids:
                     candidate_sentence_ids.append(neighbor_id)
@@ -174,7 +175,7 @@ class AnswerQuestionUseCase:
         self,
         context: str,
         question: str,
-        completion_model: str = "text-davinci-003",
+        completion_model: str = "gpt-3.5-turbo",
         max_generate_tokens: int = 150,
         stop_sequence: str = None
     ) -> str:
@@ -202,9 +203,57 @@ class AnswerQuestionUseCase:
             回答
         """
 
+        answer = ""
+
+        if "gpt-3.5" in completion_model:
+            answer = self._answer_question_using_chatgpt(
+                context, question, completion_model
+            )
+        else:
+            answer = self._answer_question_using_davinci(
+                context, question, completion_model, max_generate_tokens, stop_sequence
+            )
+
+        return answer
+
+    def _answer_question_using_davinci(
+        self,
+        context: str,
+        question: str,
+        completion_model: str = "text-davinci-003",
+        max_generate_tokens: int = 500,
+        stop_sequence: str = None
+    ) -> str:
+        """
+        コンテキストと質問を与えて回答を得る
+
+        Parameters
+        ----------
+        context : str
+            コンテキスト
+        question : str
+            質問
+        completion_model : str, optional
+            使用する自然言語モデル名
+        max_generate_tokens : int, optional
+            生成するトークンの最大数
+        stop_sequence : str, optional
+            生成を停止する特定の文字列
+            特定の文字列にヒットすると、トークン生成を中止してテキストを返す。
+            文法的な完全性を保証するための役割を果たす。
+
+        Returns
+        -------
+        str
+            回答
+        """
+
+        # プロンプトを作成する
+        prompt = PromptBuilder.build(context, question)
+
         # コンテキストを与えて質問の回答を得る
         completion_response = openai.Completion.create(
-            prompt=f"Answer the question based on the context below, and if the question can't be answered based on the context, say \"I don't know\"\n\nContext: {context}\n\n---\n\nQuestion: {question}\nAnswer:",
+            prompt=prompt,
             temperature=0,
             max_tokens=max_generate_tokens,
             top_p=1,
@@ -214,9 +263,54 @@ class AnswerQuestionUseCase:
             model=completion_model,
         )
 
+        self._logger.info(f"Model: {completion_model}")
         self._logger.info(f"Context: {context}")
         self._logger.info(f"Question: {question}")
         self._logger.info(f"Answer: {completion_response['choices'][0]['text']}")
 
         # 答えを返す
         return completion_response["choices"][0]["text"]
+
+    def _answer_question_using_chatgpt(
+        self,
+        context: str,
+        question: str,
+        completion_model: str = "gpt-3.5-turbo",
+    ) -> str:
+        """
+        コンテキストと質問を与えて回答を得る
+
+        Parameters
+        ----------
+        context : str
+            コンテキスト
+        question : str
+            質問
+        completion_model : str, optional
+            使用する自然言語モデル名
+
+        Returns
+        -------
+        str
+            回答
+        """
+
+        # プロンプトを作成する
+        prompt = PromptBuilder.build(context, question)
+
+        # コンテキストを与えて質問の回答を得る
+        response = openai.ChatCompletion.create(
+            model=completion_model,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ]
+        )
+
+        self._logger.info(f"Model: {completion_model}")
+        self._logger.info(f"Context: {context}")
+        self._logger.info(f"Question: {question}")
+        self._logger.info(f"Answer: {response.choices[0].message.content}")
+
+        # 答えを返す
+        return response.choices[0].message.content
